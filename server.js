@@ -20,7 +20,7 @@ try {
   process.exit(1);
 }
 
-// 2. Initialize Express (MUST be BEFORE any routes are defined)
+// 2. Initialize Express
 const app = express();
 
 // 3. Middleware
@@ -48,6 +48,86 @@ const sanityClient = createClient({
 app.get('/', (req, res) => {
   res.send('Aero Backend Server is running successfully!');
 });
+
+// ------------------------------------------
+// TEAM ROUTES
+// ------------------------------------------
+
+// POST: Add new Team Member
+app.post('/api/team', upload.single('image'), async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ success: false, error: 'Unauthorized: No token provided' });
+    }
+
+    const idToken = authHeader.split('Bearer ')[1];
+    await getAuth().verifyIdToken(idToken);
+
+    const { name, role, teamType, subsystem, linkedIn } = req.body;
+    const file = req.file;
+
+    if (!name || !file) {
+      return res.status(400).json({ success: false, error: 'Name and photo image are required' });
+    }
+
+    // Upload image to Sanity
+    const imageAsset = await sanityClient.assets.upload('image', file.buffer, {
+      filename: file.originalname,
+    });
+
+    // Create teamMember document in Sanity
+    const teamDoc = {
+      _type: 'teamMember',
+      name,
+      role,
+      teamType: teamType || 'Member',
+      subsystem,
+      linkedIn: linkedIn || '',
+      image: {
+        _type: 'image',
+        asset: {
+          _type: 'reference',
+          _ref: imageAsset._id,
+        },
+      },
+    };
+
+    const result = await sanityClient.create(teamDoc);
+    return res.status(200).json({ success: true, data: result });
+  } catch (error) {
+    console.error('Error adding team member:', error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// DELETE: Remove Team Member
+app.delete('/api/team/:id', async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ success: false, error: 'Unauthorized: No token provided' });
+    }
+
+    const idToken = authHeader.split('Bearer ')[1];
+    await getAuth().verifyIdToken(idToken);
+
+    const { id } = req.params;
+    if (!id) {
+      return res.status(400).json({ success: false, error: 'Member ID is required' });
+    }
+
+    await sanityClient.delete(id);
+    return res.status(200).json({ success: true });
+  } catch (error) {
+    console.error('Error deleting team member:', error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ------------------------------------------
+// GALLERY ROUTES
+// ------------------------------------------
 
 // GET: Fetch all gallery folders
 app.get('/api/gallery-folders', async (req, res) => {
@@ -192,6 +272,26 @@ app.post('/api/upload-gallery-images', upload.array('images'), async (req, res) 
     return res.status(200).json({ success: true, data: result });
   } catch (error) {
     console.error('Error uploading gallery images:', error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+app.get('/api/team', async (req, res) => {
+  try {
+    const query = `
+      *[_type == "teamMember"] | order(_createdAt desc) {
+        _id,
+        name,
+        role,
+        teamType,
+        subsystem,
+        linkedIn,
+        "imageUrl": image.asset->url
+      }
+    `;
+    const teamMembers = await sanityClient.fetch(query);
+    return res.status(200).json(teamMembers);
+  } catch (error) {
+    console.error('Error fetching team members:', error);
     return res.status(500).json({ success: false, error: error.message });
   }
 });
