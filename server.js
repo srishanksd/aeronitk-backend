@@ -550,39 +550,23 @@ app.delete('/api/team/:id', async (req, res) => {
 // ==========================================
 
 app.get('/api/team', async (req, res) => {
-
   try {
 
     const query = `
-
-      *[_type == "teamMember"]
-      | order(_createdAt desc) {
-
+      *[_type == "teamMember"] | order(_createdAt desc) {
         _id,
-
         name,
-
         role,
-
         teamType,
-
         subsystem,
-
         linkedIn,
-
-        image
-
+        "imageUrl": image.asset->url
       }
-
     `;
 
-
-    const teamMembers =
-      await sanityClient.fetch(query);
-
+    const teamMembers = await sanityClient.fetch(query);
 
     return res.status(200).json(teamMembers);
-
 
   } catch (error) {
 
@@ -591,17 +575,11 @@ app.get('/api/team', async (req, res) => {
       error
     );
 
-
     return res.status(500).json({
-
       success: false,
-
       error: error.message
-
     });
-
   }
-
 });
 
 
