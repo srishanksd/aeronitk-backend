@@ -8,326 +8,1263 @@ const { initializeApp, cert } = require('firebase-admin/app');
 const { getAuth } = require('firebase-admin/auth');
 const { createClient } = require('@sanity/client');
 
+
+// ==========================================
 // 1. Initialize Firebase Admin
+// ==========================================
+
 try {
   const serviceAccount = require('./serviceAccountKey.json');
+
   initializeApp({
     credential: cert(serviceAccount),
   });
-  console.log('Firebase Admin initialized successfully using serviceAccountKey.json');
+
+  console.log(
+    'Firebase Admin initialized successfully using serviceAccountKey.json'
+  );
+
 } catch (error) {
-  console.error('Firebase Admin initialization failed:', error.message);
+
+  console.error(
+    'Firebase Admin initialization failed:',
+    error.message
+  );
+
   process.exit(1);
 }
 
+
+// ==========================================
 // 2. Initialize Express
+// ==========================================
+
 const app = express();
 
+
+// ==========================================
 // 3. Middleware
+// ==========================================
+
 app.use(cors());
+
 app.use(express.json());
+
 
 const upload = multer({
   storage: multer.memoryStorage(),
 });
 
+
+// ==========================================
 // 4. Initialize Sanity Client
+// ==========================================
+
 const sanityClient = createClient({
+
   projectId: process.env.SANITY_PROJECT_ID,
+
   dataset: process.env.SANITY_DATASET || 'production',
+
   token: process.env.SANITY_WRITE_TOKEN,
+
   apiVersion: '2024-01-01',
+
   useCdn: false,
+
 });
+
 
 // ==========================================
 // ROUTES
 // ==========================================
 
+
+// ==========================================
 // Test route
+// ==========================================
+
 app.get('/', (req, res) => {
-  res.send('Aero Backend Server is running successfully!');
+
+  res.send(
+    'Aero Backend Server is running successfully!'
+  );
+
 });
 
-// ------------------------------------------
-// TEAM ROUTES
-// ------------------------------------------
 
+// ==========================================
+// TEAM ROUTES
+// ==========================================
+
+
+// ==========================================
 // POST: Add new Team Member
+// ==========================================
+
 app.post('/api/team', upload.single('image'), async (req, res) => {
+
   try {
+
+    // --------------------------------------
+    // Authentication
+    // --------------------------------------
+
     const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({ success: false, error: 'Unauthorized: No token provided' });
+
+    if (
+      !authHeader ||
+      !authHeader.startsWith('Bearer ')
+    ) {
+
+      return res.status(401).json({
+
+        success: false,
+
+        error:
+          'Unauthorized: No token provided'
+
+      });
+
     }
 
-    const idToken = authHeader.split('Bearer ')[1];
+
+    const idToken =
+      authHeader.split('Bearer ')[1];
+
+
     await getAuth().verifyIdToken(idToken);
 
-    const { name, role, teamType, subsystem, linkedIn } = req.body;
-    const file = req.file;
 
-    if (!name || !file) {
-      return res.status(400).json({ success: false, error: 'Name and photo image are required' });
-    }
+    // --------------------------------------
+    // Get form data
+    // --------------------------------------
 
-    // Upload image to Sanity
-    const imageAsset = await sanityClient.assets.upload('image', file.buffer, {
-      filename: file.originalname,
-    });
-
-    // Create teamMember document in Sanity
-    const teamDoc = {
-      _type: 'teamMember',
+    const {
       name,
       role,
-      teamType: teamType || 'Member',
+      teamType,
       subsystem,
-      linkedIn: linkedIn || '',
-      image: {
-        _type: 'image',
-        asset: {
-          _type: 'reference',
-          _ref: imageAsset._id,
-        },
-      },
-    };
+      linkedIn
+    } = req.body;
 
-    const result = await sanityClient.create(teamDoc);
-    return res.status(200).json({ success: true, data: result });
-  } catch (error) {
-    console.error('Error adding team member:', error);
-    return res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// DELETE: Remove Team Member
-app.delete('/api/team/:id', async (req, res) => {
-  try {
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({ success: false, error: 'Unauthorized: No token provided' });
-    }
-
-    const idToken = authHeader.split('Bearer ')[1];
-    await getAuth().verifyIdToken(idToken);
-
-    const { id } = req.params;
-    if (!id) {
-      return res.status(400).json({ success: false, error: 'Member ID is required' });
-    }
-
-    await sanityClient.delete(id);
-    return res.status(200).json({ success: true });
-  } catch (error) {
-    console.error('Error deleting team member:', error);
-    return res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// ------------------------------------------
-// GALLERY ROUTES
-// ------------------------------------------
-
-// GET: Fetch all gallery folders
-app.get('/api/gallery-folders', async (req, res) => {
-  try {
-    const query = `
-      *[_type == "galleryFolder"] | order(_createdAt desc) {
-        _id,
-        name,
-        description,
-        "cover": coverImage.asset->url,
-        images[]{
-          _key,
-          "src": image.asset->url
-        }
-      }
-    `;
-    const galleryFolders = await sanityClient.fetch(query);
-    return res.status(200).json({ success: true, folders: galleryFolders });
-  } catch (error) {
-    console.error('Error fetching gallery folders:', error);
-    return res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// POST: Create or Update Gallery Folder
-app.post('/api/save-gallery-folder', upload.single('coverImage'), async (req, res) => {
-  try {
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({ success: false, error: 'Unauthorized: No token provided' });
-    }
-
-    const idToken = authHeader.split('Bearer ')[1];
-    await getAuth().verifyIdToken(idToken);
-
-    const { folderId, name, description } = req.body;
     const file = req.file;
 
-    let coverImageAsset;
-    if (file) {
-      coverImageAsset = await sanityClient.assets.upload('image', file.buffer, {
-        filename: file.originalname,
+
+    // --------------------------------------
+    // Validate
+    // --------------------------------------
+
+    if (!name || !file) {
+
+      return res.status(400).json({
+
+        success: false,
+
+        error:
+          'Name and photo image are required'
+
       });
+
     }
 
-    const folderDoc = {
-      _type: 'galleryFolder',
+
+    // --------------------------------------
+    // Upload image to Sanity
+    // --------------------------------------
+
+    const imageAsset =
+      await sanityClient.assets.upload(
+        'image',
+        file.buffer,
+        {
+          filename: file.originalname
+        }
+      );
+
+
+    // --------------------------------------
+    // Create Team Member document
+    // --------------------------------------
+
+    const teamDoc = {
+
+      _type: 'teamMember',
+
       name,
-      description: description || '',
-      ...(coverImageAsset
-        ? {
-            coverImage: {
-              _type: 'image',
-              asset: { _type: 'reference', _ref: coverImageAsset._id },
-            },
-          }
-        : {}),
+
+      role,
+
+      teamType:
+        teamType || 'Member',
+
+      subsystem,
+
+      linkedIn:
+        linkedIn || '',
+
+      image: {
+
+        _type: 'image',
+
+        asset: {
+
+          _type: 'reference',
+
+          _ref: imageAsset._id
+
+        }
+
+      }
+
     };
 
-    const isEditing = folderId && folderId !== 'null' && folderId !== 'undefined' && folderId.trim() !== '';
 
-    let result;
-    if (isEditing) {
-      result = await sanityClient.patch(folderId).set(folderDoc).commit();
-    } else {
-      result = await sanityClient.create(folderDoc);
-    }
+    // --------------------------------------
+    // Create document in Sanity
+    // --------------------------------------
 
-    return res.status(200).json({ success: true, data: result });
+    const result =
+      await sanityClient.create(teamDoc);
+
+
+    return res.status(200).json({
+
+      success: true,
+
+      data: result
+
+    });
+
+
   } catch (error) {
-    console.error('Error saving gallery folder:', error);
-    return res.status(500).json({ success: false, error: error.message });
-  }
-});
 
-// POST: Delete Gallery Folder
-app.post('/api/delete-gallery-folder', async (req, res) => {
-  try {
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({ success: false, error: 'Unauthorized: No token provided' });
-    }
-
-    const idToken = authHeader.split('Bearer ')[1];
-    await getAuth().verifyIdToken(idToken);
-
-    const { folderId } = req.body;
-    if (!folderId) {
-      return res.status(400).json({ success: false, error: 'Folder ID is required' });
-    }
-
-    await sanityClient.delete(folderId);
-    return res.status(200).json({ success: true });
-  } catch (error) {
-    console.error('Error deleting gallery folder:', error);
-    return res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// POST: Upload multiple images to a gallery folder
-app.post('/api/upload-gallery-images', upload.array('images'), async (req, res) => {
-  try {
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({ success: false, error: 'Unauthorized: No token provided' });
-    }
-
-    const idToken = authHeader.split('Bearer ')[1];
-    await getAuth().verifyIdToken(idToken);
-
-    const { folderId } = req.body;
-    const files = req.files;
-
-    if (!folderId || !files || files.length === 0) {
-      return res.status(400).json({ success: false, error: 'Folder ID and images are required' });
-    }
-
-    const uploadedImageItems = await Promise.all(
-      files.map(async (file) => {
-        const asset = await sanityClient.assets.upload('image', file.buffer, {
-          filename: file.originalname,
-        });
-        return {
-          _key: Math.random().toString(36).substring(2, 9),
-          image: {
-            _type: 'image',
-            asset: {
-              _type: 'reference',
-              _ref: asset._id,
-            },
-          },
-        };
-      })
+    console.error(
+      'Error adding team member:',
+      error
     );
 
-    const result = await sanityClient
-      .patch(folderId)
-      .setIfMissing({ images: [] })
-      .append('images', uploadedImageItems)
-      .commit();
+    return res.status(500).json({
 
-    return res.status(200).json({ success: true, data: result });
-  } catch (error) {
-    console.error('Error uploading gallery images:', error);
-    return res.status(500).json({ success: false, error: error.message });
+      success: false,
+
+      error: error.message
+
+    });
+
   }
+
 });
-app.get('/api/team', async (req, res) => {
-  try {
-    const query = `
-      *[_type == "teamMember"] | order(_createdAt desc) {
-        _id,
+
+
+// ==========================================
+// PUT: Edit Team Member
+// ==========================================
+
+app.put(
+  '/api/team/:id',
+  upload.single('image'),
+  async (req, res) => {
+
+    try {
+
+      // --------------------------------------
+      // Authentication
+      // --------------------------------------
+
+      const authHeader =
+        req.headers.authorization;
+
+
+      if (
+        !authHeader ||
+        !authHeader.startsWith('Bearer ')
+      ) {
+
+        return res.status(401).json({
+
+          success: false,
+
+          error:
+            'Unauthorized: No token provided'
+
+        });
+
+      }
+
+
+      const idToken =
+        authHeader.split('Bearer ')[1];
+
+
+      await getAuth().verifyIdToken(idToken);
+
+
+      // --------------------------------------
+      // Get member ID
+      // --------------------------------------
+
+      const { id } = req.params;
+
+
+      if (!id) {
+
+        return res.status(400).json({
+
+          success: false,
+
+          error:
+            'Member ID is required'
+
+        });
+
+      }
+
+
+      // --------------------------------------
+      // Get form data
+      // --------------------------------------
+
+      const {
         name,
         role,
         teamType,
         subsystem,
-        linkedIn,
-        "imageUrl": image.asset->url
-      }
-    `;
-    const teamMembers = await sanityClient.fetch(query);
-    return res.status(200).json(teamMembers);
-  } catch (error) {
-    console.error('Error fetching team members:', error);
-    return res.status(500).json({ success: false, error: error.message });
-  }
-});
+        linkedIn
+      } = req.body;
 
-// POST: Delete individual image from a gallery folder
-app.post('/api/delete-gallery-image', async (req, res) => {
-  try {
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({ success: false, error: 'Unauthorized: No token provided' });
+
+      // --------------------------------------
+      // Validate
+      // --------------------------------------
+
+      if (!name) {
+
+        return res.status(400).json({
+
+          success: false,
+
+          error:
+            'Name is required'
+
+        });
+
+      }
+
+
+      // --------------------------------------
+      // Fields to update
+      // --------------------------------------
+
+      const updateData = {
+
+        name,
+
+        role,
+
+        teamType:
+          teamType || 'Member',
+
+        subsystem,
+
+        linkedIn:
+          linkedIn || ''
+
+      };
+
+
+      // --------------------------------------
+      // New image?
+      // --------------------------------------
+
+      if (req.file) {
+
+        const imageAsset =
+          await sanityClient.assets.upload(
+            'image',
+            req.file.buffer,
+            {
+              filename:
+                req.file.originalname
+            }
+          );
+
+
+        updateData.image = {
+
+          _type: 'image',
+
+          asset: {
+
+            _type: 'reference',
+
+            _ref: imageAsset._id
+
+          }
+
+        };
+
+      }
+
+
+      // --------------------------------------
+      // Update Sanity document
+      // --------------------------------------
+
+      const result =
+        await sanityClient
+          .patch(id)
+          .set(updateData)
+          .commit();
+
+
+      return res.status(200).json({
+
+        success: true,
+
+        data: result
+
+      });
+
+
+    } catch (error) {
+
+      console.error(
+        'Error updating team member:',
+        error
+      );
+
+
+      return res.status(500).json({
+
+        success: false,
+
+        error: error.message
+
+      });
+
     }
 
-    const idToken = authHeader.split('Bearer ')[1];
+  }
+);
+
+
+// ==========================================
+// DELETE: Remove Team Member
+// ==========================================
+
+app.delete('/api/team/:id', async (req, res) => {
+
+  try {
+
+    // --------------------------------------
+    // Authentication
+    // --------------------------------------
+
+    const authHeader =
+      req.headers.authorization;
+
+
+    if (
+      !authHeader ||
+      !authHeader.startsWith('Bearer ')
+    ) {
+
+      return res.status(401).json({
+
+        success: false,
+
+        error:
+          'Unauthorized: No token provided'
+
+      });
+
+    }
+
+
+    const idToken =
+      authHeader.split('Bearer ')[1];
+
+
     await getAuth().verifyIdToken(idToken);
 
-    const { folderId, imageId } = req.body;
-    if (!folderId || !imageId) {
-      return res.status(400).json({ success: false, error: 'Folder ID and Image ID are required' });
+
+    // --------------------------------------
+    // Get member ID
+    // --------------------------------------
+
+    const { id } = req.params;
+
+
+    if (!id) {
+
+      return res.status(400).json({
+
+        success: false,
+
+        error:
+          'Member ID is required'
+
+      });
+
     }
 
-    const result = await sanityClient
-      .patch(folderId)
-      .unset([`images[_key == "${imageId}"]`])
-      .commit();
 
-    return res.status(200).json({ success: true, data: result });
+    // --------------------------------------
+    // Delete from Sanity
+    // --------------------------------------
+
+    await sanityClient.delete(id);
+
+
+    return res.status(200).json({
+
+      success: true
+
+    });
+
+
   } catch (error) {
-    console.error('Error deleting gallery image:', error);
-    return res.status(500).json({ success: false, error: error.message });
+
+    console.error(
+      'Error deleting team member:',
+      error
+    );
+
+
+    return res.status(500).json({
+
+      success: false,
+
+      error: error.message
+
+    });
+
   }
+
 });
+
+
+// ==========================================
+// GET: Fetch Team Members
+// ==========================================
+
+app.get('/api/team', async (req, res) => {
+
+  try {
+
+    const query = `
+
+      *[_type == "teamMember"]
+      | order(_createdAt desc) {
+
+        _id,
+
+        name,
+
+        role,
+
+        teamType,
+
+        subsystem,
+
+        linkedIn,
+
+        image
+
+      }
+
+    `;
+
+
+    const teamMembers =
+      await sanityClient.fetch(query);
+
+
+    return res.status(200).json(teamMembers);
+
+
+  } catch (error) {
+
+    console.error(
+      'Error fetching team members:',
+      error
+    );
+
+
+    return res.status(500).json({
+
+      success: false,
+
+      error: error.message
+
+    });
+
+  }
+
+});
+
+
+// ==========================================
+// GALLERY ROUTES
+// ==========================================
+
+
+// ==========================================
+// GET: Fetch all gallery folders
+// ==========================================
+
+app.get(
+  '/api/gallery-folders',
+  async (req, res) => {
+
+    try {
+
+      const query = `
+
+        *[_type == "galleryFolder"]
+        | order(_createdAt desc) {
+
+          _id,
+
+          name,
+
+          description,
+
+          "cover":
+            coverImage.asset->url,
+
+          images[] {
+
+            _key,
+
+            "src":
+              image.asset->url
+
+          }
+
+        }
+
+      `;
+
+
+      const galleryFolders =
+        await sanityClient.fetch(query);
+
+
+      return res.status(200).json({
+
+        success: true,
+
+        folders: galleryFolders
+
+      });
+
+
+    } catch (error) {
+
+      console.error(
+        'Error fetching gallery folders:',
+        error
+      );
+
+
+      return res.status(500).json({
+
+        success: false,
+
+        error: error.message
+
+      });
+
+    }
+
+  }
+);
+
+
+// ==========================================
+// POST: Create or Update Gallery Folder
+// ==========================================
+
+app.post(
+  '/api/save-gallery-folder',
+  upload.single('coverImage'),
+  async (req, res) => {
+
+    try {
+
+      // --------------------------------------
+      // Authentication
+      // --------------------------------------
+
+      const authHeader =
+        req.headers.authorization;
+
+
+      if (
+        !authHeader ||
+        !authHeader.startsWith('Bearer ')
+      ) {
+
+        return res.status(401).json({
+
+          success: false,
+
+          error:
+            'Unauthorized: No token provided'
+
+        });
+
+      }
+
+
+      const idToken =
+        authHeader.split('Bearer ')[1];
+
+
+      await getAuth().verifyIdToken(idToken);
+
+
+      // --------------------------------------
+      // Form data
+      // --------------------------------------
+
+      const {
+        folderId,
+        name,
+        description
+      } = req.body;
+
+      const file = req.file;
+
+
+      // --------------------------------------
+      // Upload cover image if provided
+      // --------------------------------------
+
+      let coverImageAsset;
+
+
+      if (file) {
+
+        coverImageAsset =
+          await sanityClient.assets.upload(
+            'image',
+            file.buffer,
+            {
+              filename:
+                file.originalname
+            }
+          );
+
+      }
+
+
+      // --------------------------------------
+      // Build document
+      // --------------------------------------
+
+      const folderDoc = {
+
+        _type: 'galleryFolder',
+
+        name,
+
+        description:
+          description || '',
+
+        ...(coverImageAsset
+          ? {
+
+              coverImage: {
+
+                _type: 'image',
+
+                asset: {
+
+                  _type: 'reference',
+
+                  _ref:
+                    coverImageAsset._id
+
+                }
+
+              }
+
+            }
+
+          : {})
+
+      };
+
+
+      // --------------------------------------
+      // Check whether editing
+      // --------------------------------------
+
+      const isEditing =
+        folderId &&
+        folderId !== 'null' &&
+        folderId !== 'undefined' &&
+        folderId.trim() !== '';
+
+
+      let result;
+
+
+      if (isEditing) {
+
+        result =
+          await sanityClient
+            .patch(folderId)
+            .set(folderDoc)
+            .commit();
+
+      } else {
+
+        result =
+          await sanityClient.create(
+            folderDoc
+          );
+
+      }
+
+
+      return res.status(200).json({
+
+        success: true,
+
+        data: result
+
+      });
+
+
+    } catch (error) {
+
+      console.error(
+        'Error saving gallery folder:',
+        error
+      );
+
+
+      return res.status(500).json({
+
+        success: false,
+
+        error: error.message
+
+      });
+
+    }
+
+  }
+);
+
+
+// ==========================================
+// POST: Delete Gallery Folder
+// ==========================================
+
+app.post(
+  '/api/delete-gallery-folder',
+  async (req, res) => {
+
+    try {
+
+      // --------------------------------------
+      // Authentication
+      // --------------------------------------
+
+      const authHeader =
+        req.headers.authorization;
+
+
+      if (
+        !authHeader ||
+        !authHeader.startsWith('Bearer ')
+      ) {
+
+        return res.status(401).json({
+
+          success: false,
+
+          error:
+            'Unauthorized: No token provided'
+
+        });
+
+      }
+
+
+      const idToken =
+        authHeader.split('Bearer ')[1];
+
+
+      await getAuth().verifyIdToken(idToken);
+
+
+      // --------------------------------------
+      // Get folder ID
+      // --------------------------------------
+
+      const { folderId } = req.body;
+
+
+      if (!folderId) {
+
+        return res.status(400).json({
+
+          success: false,
+
+          error:
+            'Folder ID is required'
+
+        });
+
+      }
+
+
+      // --------------------------------------
+      // Delete folder
+      // --------------------------------------
+
+      await sanityClient.delete(
+        folderId
+      );
+
+
+      return res.status(200).json({
+
+        success: true
+
+      });
+
+
+    } catch (error) {
+
+      console.error(
+        'Error deleting gallery folder:',
+        error
+      );
+
+
+      return res.status(500).json({
+
+        success: false,
+
+        error: error.message
+
+      });
+
+    }
+
+  }
+);
+
+
+// ==========================================
+// POST: Upload multiple images
+// ==========================================
+
+app.post(
+  '/api/upload-gallery-images',
+  upload.array('images'),
+  async (req, res) => {
+
+    try {
+
+      // --------------------------------------
+      // Authentication
+      // --------------------------------------
+
+      const authHeader =
+        req.headers.authorization;
+
+
+      if (
+        !authHeader ||
+        !authHeader.startsWith('Bearer ')
+      ) {
+
+        return res.status(401).json({
+
+          success: false,
+
+          error:
+            'Unauthorized: No token provided'
+
+        });
+
+      }
+
+
+      const idToken =
+        authHeader.split('Bearer ')[1];
+
+
+      await getAuth().verifyIdToken(idToken);
+
+
+      // --------------------------------------
+      // Form data
+      // --------------------------------------
+
+      const { folderId } =
+        req.body;
+
+      const files =
+        req.files;
+
+
+      if (
+        !folderId ||
+        !files ||
+        files.length === 0
+      ) {
+
+        return res.status(400).json({
+
+          success: false,
+
+          error:
+            'Folder ID and images are required'
+
+        });
+
+      }
+
+
+      // --------------------------------------
+      // Upload images
+      // --------------------------------------
+
+      const uploadedImageItems =
+        await Promise.all(
+
+          files.map(
+            async (file) => {
+
+              const asset =
+                await sanityClient.assets.upload(
+                  'image',
+                  file.buffer,
+                  {
+                    filename:
+                      file.originalname
+                  }
+                );
+
+
+              return {
+
+                _key:
+                  Math.random()
+                    .toString(36)
+                    .substring(2, 9),
+
+                image: {
+
+                  _type: 'image',
+
+                  asset: {
+
+                    _type: 'reference',
+
+                    _ref: asset._id
+
+                  }
+
+                }
+
+              };
+
+            }
+          )
+
+        );
+
+
+      // --------------------------------------
+      // Add images to folder
+      // --------------------------------------
+
+      const result =
+        await sanityClient
+
+          .patch(folderId)
+
+          .setIfMissing({
+            images: []
+          })
+
+          .append(
+            'images',
+            uploadedImageItems
+          )
+
+          .commit();
+
+
+      return res.status(200).json({
+
+        success: true,
+
+        data: result
+
+      });
+
+
+    } catch (error) {
+
+      console.error(
+        'Error uploading gallery images:',
+        error
+      );
+
+
+      return res.status(500).json({
+
+        success: false,
+
+        error: error.message
+
+      });
+
+    }
+
+  }
+);
+
+
+// ==========================================
+// POST: Delete individual gallery image
+// ==========================================
+
+app.post(
+  '/api/delete-gallery-image',
+  async (req, res) => {
+
+    try {
+
+      // --------------------------------------
+      // Authentication
+      // --------------------------------------
+
+      const authHeader =
+        req.headers.authorization;
+
+
+      if (
+        !authHeader ||
+        !authHeader.startsWith('Bearer ')
+      ) {
+
+        return res.status(401).json({
+
+          success: false,
+
+          error:
+            'Unauthorized: No token provided'
+
+        });
+
+      }
+
+
+      const idToken =
+        authHeader.split('Bearer ')[1];
+
+
+      await getAuth().verifyIdToken(idToken);
+
+
+      // --------------------------------------
+      // Get IDs
+      // --------------------------------------
+
+      const {
+        folderId,
+        imageId
+      } = req.body;
+
+
+      if (
+        !folderId ||
+        !imageId
+      ) {
+
+        return res.status(400).json({
+
+          success: false,
+
+          error:
+            'Folder ID and Image ID are required'
+
+        });
+
+      }
+
+
+      // --------------------------------------
+      // Remove image
+      // --------------------------------------
+
+      const result =
+        await sanityClient
+
+          .patch(folderId)
+
+          .unset([
+            `images[_key == "${imageId}"]`
+          ])
+
+          .commit();
+
+
+      return res.status(200).json({
+
+        success: true,
+
+        data: result
+
+      });
+
+
+    } catch (error) {
+
+      console.error(
+        'Error deleting gallery image:',
+        error
+      );
+
+
+      return res.status(500).json({
+
+        success: false,
+
+        error: error.message
+
+      });
+
+    }
+
+  }
+);
+
 
 // ==========================================
 // 5. Start Server
 // ==========================================
-const PORT = process.env.PORT || 3001;
+
+const PORT =
+  process.env.PORT || 3001;
+
+
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+
+  console.log(
+    `Server running on port ${PORT}`
+  );
+
 });
