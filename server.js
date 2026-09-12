@@ -50,12 +50,21 @@ const authenticateFirebaseUser = async (req, res, next) => {
 };
 
 // 4. Initialize Sanity Client
+// Write client: needed for create/patch/delete/asset uploads — must bypass CDN
 const sanityClient = createClient({
   projectId: process.env.SANITY_PROJECT_ID,
   dataset: process.env.SANITY_DATASET || 'production',
   token: process.env.SANITY_WRITE_TOKEN,
   apiVersion: '2024-01-01',
   useCdn: false,
+});
+
+// Read client: for public GET routes — served from Sanity's CDN, no token needed
+const sanityReadClient = createClient({
+  projectId: process.env.SANITY_PROJECT_ID,
+  dataset: process.env.SANITY_DATASET || 'production',
+  apiVersion: '2024-01-01',
+  useCdn: true,
 });
 
 // ==========================================
@@ -84,7 +93,7 @@ app.get('/api/alumni', async (req, res) => {
         "memberCount": count(images)
       }
     `;
-    const batches = await sanityClient.fetch(query);
+    const batches = await sanityReadClient.fetch(query);
     return res.status(200).json({ success: true, batches });
   } catch (error) {
     console.error('Error fetching alumni batches:', error);
@@ -113,13 +122,15 @@ app.get('/api/alumni/:batchyear', async (req, res) => {
         }
       }
     `;
-    const batchData = await sanityClient.fetch(query, { batchyear });
+    const batchData = await sanityReadClient.fetch(query, { batchyear });
     return res.status(200).json({ success: true, batch: batchData || null });
   } catch (error) {
     console.error('Error fetching batch details:', error);
     return res.status(500).json({ success: false, error: error.message });
   }
 });
+
+
 
 // POST: Create or Update Batch Folder
 app.post('/api/save-alumni-batch', authenticateFirebaseUser, upload.single('coverImage'), async (req, res) => {
@@ -386,6 +397,50 @@ app.get('/api/gallery-folders', async (req, res) => {
     return res.status(200).json({ success: true, folders: galleryFolders });
   } catch (error) {
     console.error('Error fetching gallery folders:', error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// GET: lightweight folder list for the public Gallery page (no images payload)
+app.get('/api/gallery-summary', async (req, res) => {
+  try {
+    const query = `
+      *[_type == "galleryFolder"] | order(_createdAt desc) {
+        _id,
+        name,
+        description,
+        "cover": coverImage.asset->url,
+        "imageCount": count(images)
+      }
+    `;
+    const folders = await sanityReadClient.fetch(query);
+    return res.status(200).json({ success: true, folders });
+  } catch (error) {
+    console.error('Error fetching gallery summary:', error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// GET: full images for one folder, fetched only when a user opens it
+app.get('/api/gallery-folders/:folderId', async (req, res) => {
+  try {
+    const { folderId } = req.params;
+    const query = `
+      *[_type == "galleryFolder" && _id == $folderId][0] {
+        _id,
+        name,
+        description,
+        "cover": coverImage.asset->url,
+        images[]{
+          _key,
+          "src": image.asset->url
+        }
+      }
+    `;
+    const folder = await sanityReadClient.fetch(query, { folderId });
+    return res.status(200).json({ success: true, folder: folder || null });
+  } catch (error) {
+    console.error('Error fetching gallery folder detail:', error);
     return res.status(500).json({ success: false, error: error.message });
   }
 });
