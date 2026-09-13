@@ -50,7 +50,6 @@ const authenticateFirebaseUser = async (req, res, next) => {
 };
 
 // 4. Initialize Sanity Client
-// Write client: needed for create/patch/delete/asset uploads — must bypass CDN
 const sanityClient = createClient({
   projectId: process.env.SANITY_PROJECT_ID,
   dataset: process.env.SANITY_DATASET || 'production',
@@ -59,7 +58,6 @@ const sanityClient = createClient({
   useCdn: false,
 });
 
-// Read client: for public GET routes — served from Sanity's CDN, no token needed
 const sanityReadClient = createClient({
   projectId: process.env.SANITY_PROJECT_ID,
   dataset: process.env.SANITY_DATASET || 'production',
@@ -71,16 +69,159 @@ const sanityReadClient = createClient({
 // ROUTES
 // ==========================================
 
-// Test route
 app.get('/', (req, res) => {
   res.send('Aero Backend Server is running successfully!');
+});
+
+// -----------------------------------------
+// EVENTS & REGISTRATION ROUTES
+// -----------------------------------------
+
+// GET: Fetch all events
+app.get('/api/events', async (req, res) => {
+  try {
+    const query = `
+      *[_type == "event"] | order(startDate desc, _createdAt desc) {
+        _id,
+        title,
+        subtitle,
+        description,
+        status,
+        registrationKey,
+        ctaLink,
+        ctaLabel,
+        manualParticipantCount,
+        maxCapacity,
+        startDate,
+        "imageUrl": image.asset->url
+      }
+    `;
+    const events = await sanityReadClient.fetch(query);
+    return res.status(200).json({ success: true, events });
+  } catch (error) {
+    console.error('Error fetching events:', error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// POST: Create or Edit Event
+app.post('/api/save-event', authenticateFirebaseUser, upload.single('image'), async (req, res) => {
+  try {
+    const {
+      eventId,
+      title,
+      subtitle,
+      description,
+      status,
+      registrationKey,
+      ctaLink,
+      ctaLabel,
+      manualParticipantCount,
+      currentParticipants,
+      maxCapacity,
+      startDate,
+    } = req.body;
+    const file = req.file;
+
+    let imageAsset;
+    if (file) {
+      imageAsset = await sanityClient.assets.upload('image', file.buffer, {
+        filename: file.originalname,
+      });
+    }
+
+    const countVal = Number(currentParticipants ?? manualParticipantCount ?? 0);
+    const capacityVal = Number(maxCapacity ?? 0);
+
+    const eventDoc = {
+      _type: 'event',
+      title: title || '',
+      subtitle: subtitle || 'Aero NITK Registration',
+      description: description || '',
+      status: status || 'soon',
+      registrationKey: registrationKey || 'none',
+      ctaLink: ctaLink || '',
+      ctaLabel: ctaLabel || 'Open Registration Form',
+      manualParticipantCount: isNaN(countVal) ? 0 : countVal,
+      maxCapacity: isNaN(capacityVal) ? 0 : capacityVal,
+      startDate: startDate || null,
+      ...(imageAsset
+        ? {
+            image: {
+              _type: 'image',
+              asset: { _type: 'reference', _ref: imageAsset._id },
+            },
+          }
+        : {}),
+    };
+
+    const isEditing = eventId && eventId !== 'null' && eventId !== 'undefined' && eventId.trim() !== '';
+
+    let result;
+    if (isEditing) {
+      result = await sanityClient.patch(eventId).set(eventDoc).commit();
+    } else {
+      result = await sanityClient.create(eventDoc);
+    }
+
+    return res.status(200).json({ success: true, data: result });
+  } catch (error) {
+    console.error('Error saving event:', error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// POST: Bump an event's live participant count in Sanity by 1.
+// Called by the public registration form immediately after a successful
+// Firestore write, so the admin dashboard / public site reflect live
+// registrations without re-querying Firestore on every page load.
+//
+// No auth here on purpose — the public registration page (not the logged-in
+// dashboard) is what calls this. Firestore's `${registrationKey}_registrations`
+// collection remains the actual source of truth / audit trail; this number is
+// a display mirror. If abuse becomes a real concern, swap the blind .inc(1)
+// for a server-side recount against Firestore via firebase-admin, or add
+// rate-limiting.
+app.post('/api/events/:eventId/increment-count', async (req, res) => {
+  try {
+    const { eventId } = req.params;
+    if (!eventId) {
+      return res.status(400).json({ success: false, error: 'Event ID is required' });
+    }
+
+    const result = await sanityClient
+      .patch(eventId)
+      .setIfMissing({ manualParticipantCount: 0 })
+      .inc({ manualParticipantCount: 1 })
+      .commit();
+
+    return res.status(200).json({ success: true, data: result });
+  } catch (error) {
+    console.error('Error incrementing event count:', error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// DELETE: Remove Event
+app.delete('/api/events/:eventId', authenticateFirebaseUser, async (req, res) => {
+  try {
+    const { eventId } = req.params;
+    if (!eventId) {
+      return res.status(400).json({ success: false, error: 'Event ID is required' });
+    }
+
+    await sanityClient.delete(eventId);
+    return res.status(200).json({ success: true });
+  } catch (error) {
+    console.error('Error deleting event:', error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
 });
 
 // -----------------------------------------
 // ALUMNI PAGE & BATCH ROUTES
 // -----------------------------------------
 
-// GET: Fetch all Alumni Batches (for main Alumni page)
 app.get('/api/alumni', async (req, res) => {
   try {
     const query = `
@@ -101,7 +242,6 @@ app.get('/api/alumni', async (req, res) => {
   }
 });
 
-// GET: Fetch single Alumni Batch members by batchyear or document ID
 app.get('/api/alumni/:batchyear', async (req, res) => {
   try {
     const { batchyear } = req.params;
@@ -130,9 +270,6 @@ app.get('/api/alumni/:batchyear', async (req, res) => {
   }
 });
 
-
-
-// POST: Create or Update Batch Folder
 app.post('/api/save-alumni-batch', authenticateFirebaseUser, upload.single('coverImage'), async (req, res) => {
   try {
     const { batchId, batchyear, name, description } = req.body;
@@ -176,7 +313,6 @@ app.post('/api/save-alumni-batch', authenticateFirebaseUser, upload.single('cove
   }
 });
 
-// DELETE: Remove Alumni Batch Folder
 app.delete('/api/alumni/batch/:batchId', authenticateFirebaseUser, async (req, res) => {
   try {
     const { batchId } = req.params;
@@ -192,7 +328,6 @@ app.delete('/api/alumni/batch/:batchId', authenticateFirebaseUser, async (req, r
   }
 });
 
-// POST: Add or Update Alumni Member inside a Batch
 app.post('/api/alumni/member', authenticateFirebaseUser, upload.single('image'), async (req, res) => {
   try {
     const { batchId, memberKey, name, role, company, linkedin } = req.body;
@@ -213,7 +348,6 @@ app.post('/api/alumni/member', authenticateFirebaseUser, upload.single('image'),
     const isEditing = memberKey && memberKey !== 'null' && memberKey !== 'undefined';
 
     if (isEditing) {
-      // Fetch existing batch to update specific member in array
       const batchDoc = await sanityClient.getDocument(batchId);
       if (!batchDoc) {
         return res.status(404).json({ success: false, error: 'Batch not found' });
@@ -243,7 +377,6 @@ app.post('/api/alumni/member', authenticateFirebaseUser, upload.single('image'),
       const result = await sanityClient.patch(batchId).set({ images: updatedMembers }).commit();
       return res.status(200).json({ success: true, data: result });
     } else {
-      // Add new member to images array
       const newMemberItem = {
         _key: Math.random().toString(36).substring(2, 9),
         name,
@@ -274,7 +407,6 @@ app.post('/api/alumni/member', authenticateFirebaseUser, upload.single('image'),
   }
 });
 
-// POST: Delete individual Alumni Member from a Batch
 app.post('/api/alumni/delete-member', authenticateFirebaseUser, async (req, res) => {
   try {
     const { batchId, memberKey } = req.body;
@@ -298,7 +430,6 @@ app.post('/api/alumni/delete-member', authenticateFirebaseUser, async (req, res)
 // TEAM ROUTES
 // ------------------------------------------
 
-// GET: Fetch all Team Members
 app.get('/api/team', async (req, res) => {
   try {
     const query = `
@@ -320,7 +451,6 @@ app.get('/api/team', async (req, res) => {
   }
 });
 
-// POST: Add new Team Member
 app.post('/api/team', authenticateFirebaseUser, upload.single('image'), async (req, res) => {
   try {
     const { name, role, teamType, subsystem, linkedIn } = req.body;
@@ -358,7 +488,6 @@ app.post('/api/team', authenticateFirebaseUser, upload.single('image'), async (r
   }
 });
 
-// DELETE: Remove Team Member
 app.delete('/api/team/:id', authenticateFirebaseUser, async (req, res) => {
   try {
     const { id } = req.params;
@@ -378,7 +507,6 @@ app.delete('/api/team/:id', authenticateFirebaseUser, async (req, res) => {
 // GALLERY ROUTES
 // ------------------------------------------
 
-// GET: Fetch all gallery folders
 app.get('/api/gallery-folders', async (req, res) => {
   try {
     const query = `
@@ -401,7 +529,6 @@ app.get('/api/gallery-folders', async (req, res) => {
   }
 });
 
-// GET: lightweight folder list for the public Gallery page (no images payload)
 app.get('/api/gallery-summary', async (req, res) => {
   try {
     const query = `
@@ -421,7 +548,6 @@ app.get('/api/gallery-summary', async (req, res) => {
   }
 });
 
-// GET: full images for one folder, fetched only when a user opens it
 app.get('/api/gallery-folders/:folderId', async (req, res) => {
   try {
     const { folderId } = req.params;
@@ -445,7 +571,6 @@ app.get('/api/gallery-folders/:folderId', async (req, res) => {
   }
 });
 
-// POST: Create or Update Gallery Folder
 app.post('/api/save-gallery-folder', authenticateFirebaseUser, upload.single('coverImage'), async (req, res) => {
   try {
     const { folderId, name, description } = req.body;
@@ -488,7 +613,6 @@ app.post('/api/save-gallery-folder', authenticateFirebaseUser, upload.single('co
   }
 });
 
-// POST: Delete Gallery Folder
 app.post('/api/delete-gallery-folder', authenticateFirebaseUser, async (req, res) => {
   try {
     const { folderId } = req.body;
@@ -504,7 +628,6 @@ app.post('/api/delete-gallery-folder', authenticateFirebaseUser, async (req, res
   }
 });
 
-// POST: Upload multiple images to a gallery folder
 app.post('/api/upload-gallery-images', authenticateFirebaseUser, upload.array('images'), async (req, res) => {
   try {
     const { folderId } = req.body;
@@ -545,7 +668,6 @@ app.post('/api/upload-gallery-images', authenticateFirebaseUser, upload.array('i
   }
 });
 
-// POST: Delete individual image from a gallery folder
 app.post('/api/delete-gallery-image', authenticateFirebaseUser, async (req, res) => {
   try {
     const { folderId, imageId } = req.body;
@@ -565,9 +687,6 @@ app.post('/api/delete-gallery-image', authenticateFirebaseUser, async (req, res)
   }
 });
 
-// ==========================================
-// 5. Start Server
-// ==========================================
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
